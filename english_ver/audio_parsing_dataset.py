@@ -371,7 +371,7 @@ class data_loader(Dataset):
         # -- for audio -- #
         self.audio_model_name = self.args.audio_model_name # "facebook/wav2vec2-base-960h"
         self.processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
-        #self.processor =  WhisperProcessor.from_pretrained("openai/whisper-base") #Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
+
         if args.task in ["audio_parsing"]:
             self.audio_model = Wav2Vec2Model.from_pretrained(self.audio_model_name, mask_feature_length=10)#.cuda()
             self.audio_tokenizer = Wav2Vec2Tokenizer.from_pretrained("facebook/wav2vec2-base-960h")
@@ -380,7 +380,7 @@ class data_loader(Dataset):
         self.tokenizer = RobertaTokenizer.from_pretrained(self.args.tokenizer,padding_side='left')
 
         # -- for image -- #
-        self.image_path = '/home/ryumj/cupcake_backup/intonation_image7/'
+        self.image_path = self.args.image_path
         self.transform = transform = transforms.Compose([        
             transforms.ToTensor(),
         ])#transforms.Resize((1200, 3000)),  # 이미지 크기 조정
@@ -603,8 +603,6 @@ class data_loader(Dataset):
                     whole_audio.detach().numpy()
                     
                     segments = segmentation.get_segments()
-                    #print("이건가 ?", word)
-                    #print(word[0].label)
                     word_list = []
                     for s in segments:
                         word_list.append(s.label.lower())
@@ -620,11 +618,8 @@ class data_loader(Dataset):
                         current_size = a.size()
                         padded_a = F.pad(a, (0, 1000 - current_size[0]), mode='constant', value=0)
                         input = self.processor(audio=padded_a, sample_rate=16000, return_tensors="pt",padding=True).input_values#.to(device)
-                        #print("input.shape", input.shape)
                         logits = self.audio_model(input.squeeze(dim=0),output_hidden_states=True).hidden_states[12]#
-                        #print("last_hiddne_state size", logits.shape)
                         word_input = torch.mean(logits.squeeze(dim=0), dim=0, keepdim=True)
-                        #print("word_input_size", word_input.shape)
                         whole_audio.append(word_input)    
 
                     whole_audio = torch.stack(whole_audio, dim=0).squeeze(dim=1) 
@@ -670,36 +665,27 @@ class data_loader(Dataset):
                 pitch_tiers, time_points = intonation.get_pitchs()
                 
                 if not time_points or not pitch_tiers:
-                    print("피치 리스트가 비어있다고라")
+                    print("pitch list empty")
                     continue
                 
                 if self.args.normalized == "ok":
                     normalized_pitch = z_score_normalization(pitch_tiers)
                 else:
-                    normalized_pitch = pitch_tiers    
-                    
-                # 랜덤 시드 고정
-                #torch.manual_seed(42)        
-                #linear = torch.nn.Linear(len(normalized_pitch), self.args.hidden_size)
-                # 초기화 설정
-                #torch.nn.init.xavier_uniform_(linear.weight)
-                #torch.nn.init.zeros_(linear.bias)
+                    normalized_pitch = pitch_tiers       
                 
-                #pitch_features = linear(torch.tensor(normalized_pitch, dtype=torch.float32))
-                
-                ### 선형 보간 함수 생성
-                interpolation_function = interp1d(time_points, pitch_tiers, kind='linear') 
-                # 등간격의 시간 포인트 생성       
-                time_uniform = np.arange(min(time_points), max(time_points) - 1e-6 , 0.001)
-                # 보간된 피치 값 계산
-                pitch_interpolated = interpolation_function(time_uniform)
-                
-                
-                #linear = torch.nn.Linear(len(pitch_interpolated), self.args.hidden_size)
-                #pitch_features = linear(torch.tensor(pitch_interpolated, dtype=torch.float32))
-                pitch_features = torch.tensor(pitch_interpolated).unsqueeze(-1)
-                #print("pitch feature shape : ", pitch_features.shape)
-                ###
+                if self.args.embedding =='linear':  
+                    linear = torch.nn.Linear(len(normalized_pitch), self.args.hidden_size)
+                    pitch_features = linear(torch.tensor(normalized_pitch, dtype=torch.float32))
+                elif self.args.embedding == 'cnn':
+                    pitch_features = torch.tensor(normalized_pitch).unsqueeze(-1)
+                elif self.args.embedding == 'interpolated': #이스터에그
+                    ### 선형 보간 함수 생성
+                    interpolation_function = interp1d(time_points, pitch_tiers, kind='linear') 
+                    # 등간격의 시간 포인트 생성       
+                    time_uniform = np.arange(min(time_points), max(time_points) - 1e-6 , 0.001)
+                    # 보간된 피치 값 계산
+                    pitch_interpolated = interpolation_function(time_uniform)
+                    pitch_features = torch.tensor(pitch_interpolated).unsqueeze(-1)
                 
                 dialog_id = name[i][:-5]
                 speaker = name[-4]            
@@ -707,10 +693,10 @@ class data_loader(Dataset):
                 
                 self.saved_data.append([dialog_id, sentence, V[i],A[i],D[i],pitch_features,waveform,sr,speaker]) 
             if self.args.normalized == "ok":
-                print("피치는 정규화되었다!!!!")
+                print("pitch was normalized]")
             else:
                 normalized_pitch = pitch_tiers
-                print("피치는 정규화되지 않았다구리")  
+                print("wasnt normalized")  
                 
         elif self.args.task in ["interpolated_intonation_and_wav2vec2"]:
             for i in tqdm(range((len(data))),mininterval=10):
@@ -725,7 +711,7 @@ class data_loader(Dataset):
                 
                 
                 if not time_points or not pitch_tiers:
-                    print("피치 리스트가 비어있다고라")
+                    print("pitch list empty")
                     continue
                 # 선형 보간 함수 생성
                 interpolation_function = interp1d(time_points, pitch_tiers, kind='linear') 
@@ -761,22 +747,22 @@ class data_loader(Dataset):
                     normalized_pitch = z_score_normalization(pitch_tiers)
                 else:
                     normalized_pitch = pitch_tiers
-                
-                # linear embedding   
-                #linear = torch.nn.Linear(len(normalized_pitch), self.args.hidden_size)
-                #pitch_features = linear(torch.tensor(normalized_pitch, dtype=torch.float32))
-
-                # cnn embedding 
-                pitch_features = torch.tensor(normalized_pitch).unsqueeze(-1)
-                pitch_features = pitch_features.mean(axis=0) # msp는 채널이 2개라서.. 
-                #print("pitch feature shape : ", pitch_features.shape)
+                               
+                if self.args.embedding == "linear":
+                    # linear embedding   
+                    linear = torch.nn.Linear(len(normalized_pitch), self.args.hidden_size)
+                    pitch_features = linear(torch.tensor(normalized_pitch, dtype=torch.float32))
+                elif self.args.embedding == 'cnn':
+                    # cnn embedding 
+                    pitch_features = torch.tensor(normalized_pitch).unsqueeze(-1)
+                    pitch_features = pitch_features.mean(axis=0) # msp has two channels
                 
                 self.saved_data.append([V[i],A[i],D[i],pitch_features,waveform,sr]) 
             if self.args.normalized == "ok":
-                print("피치는 정규화되었다!!!!")
+                print("pitch was normalized!!!!")
             else:
                 normalized_pitch = pitch_tiers
-                print("피치는 정규화되지 않았다구리")
+                print("wasnt normalized")
         
         elif self.args.task in ["mfcc_wav2vec2"]:
             for i in tqdm(range((len(data))),mininterval=10):
