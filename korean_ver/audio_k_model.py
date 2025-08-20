@@ -64,21 +64,14 @@ class AudioClassifier(torch.nn.Module):
                 
                 pitch_embeds = pitch_embeds.unsqueeze(1).expand(-1, wav2vec_outputs.size(1), -1)
             elif self.embedding == 'cnn':
-                #print("0 : ", pitches.shape)
                 pitches = pitches.squeeze(-1).unsqueeze(1)   # (batch_size, channel = 1, seq_len)
-                #print("1 : ", pitches.shape)
                 pitch_embeds = self.pitch_embedding(pitches)   # (batch_size, hidden_dim, 1)
-                #print("2 : ", pitch_embeds.shape)
                 pitch_embeds = pitch_embeds.transpose(1, 2) # (batch_size, new_seq_len, hidden_dim)
-                #print('3 : ', pitch_embeds.shape)
                 # Expand pitch embeddings to match wav2vec2.0 output sequence length
                 pitch_embeds = pitch_embeds.expand(-1, wav2vec_outputs.size(1), -1)
-            
-            #print("pitch_embeds :, ", pitch_embeds)
             # Apply attention mechanism
             attention_output, _ = self.attention_layer(query=pitch_embeds, key=wav2vec_outputs, value=wav2vec_outputs)#(wav2vec_outputs, pitch_embeds, pitch_embeds)
             
-            #print("attention score\n", attention_output)
             # Average pooling over the sequence length
             pooled_output = attention_output.mean(dim=1)
             
