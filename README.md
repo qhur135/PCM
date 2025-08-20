@@ -95,5 +95,3 @@ python local_path/iemocap_audio_train.py --config local_path/configs/audio.json
 
 ---
 
-원문 뉘앙스를 유지하면서도 논문 링크 달린 깃헙 레포에 적기 좋은 최소 정리본으로 맞췄습니다.
-혹시 README에 **실행 예시 (예: config 파일 예문)** 도 같이 적어드릴까요?
