@@ -26,10 +26,8 @@ class AudioClassifier(torch.nn.Module):
         
         if self.args.task in ['normal','msp_normal', 'msp_intonation_and_wav2vec2','audio_parsing', 'double_wav2vec2', 'normal_with_text', 'audio_parsing_with_text','audio_parsing_with_text_concat','intonation_and_wav2vec2','interpolated_intonation_and_wav2vec2','mfcc_wav2vec2']:
             print("task : ", self.args.task)
-            #self.audio_model = Wav2Vec2Model.from_pretrained(self.args.audio_model_name, mask_feature_length=10).cuda()
-            self.audio_model = HubertModel.from_pretrained("facebook/hubert-base-ls960")
-            #self.audio_model = WhisperModel.from_pretrained("openai/whisper-base")
-            self.a_hidden_size = self.audio_model.config.hidden_size # 768
+            self.audio_model = Wav2Vec2Model.from_pretrained(self.args.audio_model_name, mask_feature_length=10).cuda()
+            self.a_hidden_size = self.audio_model.config.hidden_size 
         elif self.args.task in ['temporal_normal']:
             print("task : ", self.args.task)
             self.audio_model = Wav2Vec2Model.from_pretrained(self.args.audio_model_name, mask_feature_length=10)
@@ -121,25 +119,22 @@ class AudioClassifier(torch.nn.Module):
             self.max_len = (self.a_hidden_size + self.t_input_dim) * sentence_len
             self.linear = torch.nn.Linear(self.max_len , self.num_classes).cuda()
         elif self.args.task in ['intonation_and_wav2vec2','interpolated_intonation_and_wav2vec2','intonation_contour_with_text','msp_intonation_and_wav2vec2']:
-            ### cnn 안 쓰는 경우 삭제 요망
-            # Pitch embedding
-            #self.pitch_embedding = torch.nn.Linear(self.a_hidden_size, self.a_hidden_size)
-            # CNN 기반 임베딩 레이어
-            self.pitch_embedding = nn.Sequential(
-                nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),  # Conv1D
-                nn.ReLU(),  # 활성화 함수
-                nn.Conv1d(in_channels=32, out_channels=self.a_hidden_size, kernel_size=3, stride=1, padding=1),  # Conv1D
-                nn.AdaptiveAvgPool1d(1)  # 시간축 평균 풀링
-            )
-            ###
-            
-            # 어텐션 레이어
+            if self.args.embedding =='cnn':
+                # CNN 기반 임베딩 레이어
+                self.pitch_embedding = nn.Sequential(
+                    nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),  # Conv1D
+                    nn.ReLU(),  # 활성화 함수
+                    nn.Conv1d(in_channels=32, out_channels=self.a_hidden_size, kernel_size=3, stride=1, padding=1),  # Conv1D
+                    nn.AdaptiveAvgPool1d(1)  # 시간축 평균 풀링
+                )
+            elif self.args.embedding =='linear':
+                self.pitch_embedding = torch.nn.Linear(self.a_hidden_size, self.a_hidden_size) # linear embedding            
+
+            #attention
             self.attention_layer = torch.nn.MultiheadAttention(embed_dim=self.a_hidden_size, num_heads=8)
-        
-            # Pitch embedding
-            # self.pitch_embedding = torch.nn.Linear(self.a_hidden_size, self.a_hidden_size) # linear embedding
             # Linear layer for emotion prediction
             self.fc = torch.nn.Linear(self.a_hidden_size, self.num_classes)
+            
         elif self.args.task in ['mfcc_wav2vec2']:
             # 어텐션 레이어
             self.attention_layer = torch.nn.MultiheadAttention(embed_dim=self.a_hidden_size, num_heads=8)
@@ -269,11 +264,6 @@ class AudioClassifier(torch.nn.Module):
                 # Cross-Attention 수행
                 attention_output, _ = self.attention_layer(query=query, key=key, value=value)
                 attention_outputs.append(attention_output)
-
-            #rint("num_windows:", num_windows)
-            #print("pitch_seq_len:", pitch_seq_len)
-            #print("tf_seq_len:", tf_seq_len)
-            #print("self.window_size:", self.window_size)
             
             # 윈도우별 Attention 결과를 결합
             attention_outputs = torch.cat(attention_outputs, dim=1)  # (batch_size, seq_len, hidden_dim)
@@ -479,25 +469,22 @@ class AudioClassifier(torch.nn.Module):
              
             # -- raw_audio -- #
             tf_audio = audio_inputs
-            wav2vec_outputs = self.audio_model(tf_audio,output_hidden_states=True) #real_w2v2
-            #wav2vec_outputs = self.audio_model.encoder(tf_audio,output_hidden_states=True) # whisper
- 
+            wav2vec_outputs = self.audio_model(tf_audio,output_hidden_states=True) 
             self.hidden_states = wav2vec_outputs.hidden_states
             
             wav2vec_outputs = self.hidden_states[-1]
             # Pitch embedding
-            # pitch_embeds = self.pitch_embedding(pitches) # linear embedding 
-            
-            # CNN 기반 Pitch Embedding
-            #print("before unsqueezing : ",pitches.shape)
-            if self.args.dataset == 'iemocap':
-                pitches = pitch_audio.unsqueeze(1)  # (batch_size, channel = 1, seq_len)
-            elif self.args.dataset == 'msp_podcast':
-                pitches = pitches.squeeze(-1).unsqueeze(1)  # (batch_size, channel = 1, seq_len)
-            # Ensure pitches is float32
-            pitches = pitches.to(dtype=torch.float32)
-            #print("after unsqueezing : ",pitches.shape)
-            pitch_embeds = self.pitch_embedding(pitches)  # (batch_size, hidden_dim, 1)
+            if self.args.embedding =='linear':  
+                pitch_embeds = self.pitch_embedding(pitches) # linear embedding 
+            elif self.args.embedding =='cnn':
+                if self.args.dataset == 'iemocap':
+                    pitches = pitch_audio.unsqueeze(1)  # (batch_size, channel = 1, seq_len)
+                elif self.args.dataset == 'msp_podcast':
+                    pitches = pitches.squeeze(-1).unsqueeze(1)  # (batch_size, channel = 1, seq_len)
+                # Ensure pitches is float32
+                pitches = pitches.to(dtype=torch.float32)
+                #print("after unsqueezing : ",pitches.shape)
+                pitch_embeds = self.pitch_embedding(pitches)  # (batch_size, hidden_dim, 1)
             
             if self.args.dataset == 'iemocap':
                 pitch_embeds = pitch_embeds.squeeze(-1)  # (batch_size, hidden_dim)
