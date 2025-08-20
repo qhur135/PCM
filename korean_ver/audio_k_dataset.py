@@ -253,7 +253,6 @@ class data_loader(Dataset):
                 
                 self.data.append([V[i],A[i],pitch_features, waveform,re_sr])       
 
-        # train = 8062, dev = 1000, test = 1000
         print("데이터의 최종 길이 : ", len(self.data))
         print(self.data[:5])
 
